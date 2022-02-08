@@ -1,1 +1,1 @@
-# process-mining-group-5
+# DBL Process Mining Group 5
