@@ -1,5 +1,16 @@
 Note: Everything here starts counting from 1 instead of 0
 
+Input: 
+1.  og_list: A list of integers
+Output: 
+1.  cu_list: A list of cumulative sums for items in the input list
+Function CumSum(lists)
+1.  lg <- Number of terms in og_list
+2.  For i = 1 to lg do:
+3.    sum_term <- The sum of the first i terms in og_list
+4.    cu_list[i] = sum_term
+5.  Return cu_list
+
 First part: Training
 1. Compute time difference
 2. Initialize 1st row’s time difference as 0
