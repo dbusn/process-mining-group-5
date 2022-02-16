@@ -11,6 +11,24 @@ Function CumSum(lists)
 4.    cu_list[i] = sum_term
 5.  Return cu_list
 
+Input: 
+1.  df: A dataframe
+Output: 
+1.  df: The input dataframe with time_difference and position columns being added
+Function time_difference(df)
+1.  Compute time difference and assign it to time_difference column of df
+2.  Initialize 1st row’s time difference as 0
+3.  Count number of processes per case:concept:name
+4.  Append all counts into length_per_case_List
+5.  position_lst <- CumSum(length_per_case_List)
+6.  For i in position_lst do
+7.    Set ith row’s time difference as 0
+8.  For x in length_per_case_List do
+9.    For y = 1 to x do
+10.      Append y into step_in_process
+11.  Assign step_in_process to position column of df
+12.  Return df
+
 First part: Training
 1. Compute time difference
 2. Initialize 1st row’s time difference as 0
