@@ -1,0 +1,19 @@
+First part: read datasets and 
+Read train, validation and test dataset
+Define function: assign_position
+  Count the number of processes per trace/id and append it to a list
+  Make a new list for the positions
+  For each process in a trace
+    Assign a position number
+  Add it to a new column called position
+  return dataframe
+  
+define df_train, df_val and df_test
+Select the mode action for each row/process
+Merge the training dataset with with the predicted actions based on their position in a case
+
+Second part: apply prediction dataframe to validation and test dataset
+Merge the validation set and the position dataframe
+Sort the dataframe on the timestamp
+And rename the colums: cencept:name_y to baseline_action_pred and concept:name_x to concept:name
+Do steps 1 to 3 for the test set and position dataframe
