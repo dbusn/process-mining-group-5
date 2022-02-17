@@ -6,7 +6,7 @@ Function: assign_position(df: pd.DataFrame)
   Make a new list for the positions
   For each process in a trace
     Assign a position number
-  Add it to a new column called position
+  Add a new colum to the dataframe and append the list of positions
   return dataframe
   
 define df_train, df_val and df_test
