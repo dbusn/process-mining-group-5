@@ -2,8 +2,8 @@ First part: read datasets and
 Read train, validation and test dataset
 
 Function: assign_position(df: pd.DataFrame)
-  Count the number of processes per trace/id and append it to a list
-  Make a new list for the positions
+  Count the number of processes per trace/id and append it to a list called count_lst
+  Make a new list for the positions called position_lst
   For each process in a trace
     Assign a position number
   Add a new colum to the dataframe and append the list of positions
