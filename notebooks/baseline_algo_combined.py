@@ -7,26 +7,30 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import datetime as datetime
+import sys
 
+if len(sys.argv) != 4:
+    print("Invalid command-line arguments passed")
+    sys.exit(1)
 
 # Data preparation
 process  = psutil.Process(os.getpid())
 
-df_train = pd.read_csv("bpi2017_train.csv", parse_dates = ['time:timestamp'])
-df_val = pd.read_csv("bpi2017_val.csv", parse_dates = ['time:timestamp'])
-df_test = pd.read_csv("bpi2017_test.csv", parse_dates = ['time:timestamp'])
+df_train = pd.read_csv(sys.argv[1], parse_dates = ['time:timestamp'])
+# df_val = pd.read_csv("bpi2017_val.csv", parse_dates = ['time:timestamp'])
+df_test = pd.read_csv(sys.argv[2], parse_dates = ['time:timestamp'])
 
 # The default name indicating the case ID is case:concept:name
 # concept:name is the event
 # time:timestamp is the corresponding timestamp
 # Load the datasets, sort them on case and consequently timestamp, then reset the index
 df_train = df_train.sort_values(by = ['case:concept:name', 'time:timestamp']).reset_index()
-df_val = df_val.sort_values(by = ['case:concept:name', 'time:timestamp']).reset_index()
+# df_val = df_val.sort_values(by = ['case:concept:name', 'time:timestamp']).reset_index()
 df_test = df_test.sort_values(by = ['case:concept:name', 'time:timestamp']).reset_index()
 
 # Remove obsolete columns
 df_train = df_train.drop(['index', 'Unnamed: 0'], axis = 1)
-df_val = df_val.drop(['index', 'Unnamed: 0'], axis = 1)
+# df_val = df_val.drop(['index', 'Unnamed: 0'], axis = 1)
 df_test = df_test.drop(['index', 'Unnamed: 0'], axis = 1)
 
 
@@ -67,7 +71,7 @@ def time_difference(df):
 # Apply the above changes to all dataframes
 # The warnings are obsolete, it's because it uses .at which is considerably faster than .loc
 df_train = time_difference(df_train)
-df_val = time_difference(df_val)
+# df_val = time_difference(df_val)
 df_test = time_difference(df_test)
 
 
@@ -106,7 +110,7 @@ def apply_time_prediction(df):
     return df
 
 # Apply the above changes to all dataframes
-df_val = apply_time_prediction(df_val)
+# df_val = apply_time_prediction(df_val)
 df_test = apply_time_prediction(df_test)
 
 # 5. Apply Baseline Case prediction to Validation and Test datasets
@@ -122,8 +126,9 @@ def apply_case_prediction(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-df_val = apply_case_prediction(df_val)
+# df_val = apply_case_prediction(df_val)
 df_test = apply_case_prediction(df_test)
+df_test.to_csv(sys.argv[3])
 
 print("Total memory memory used: " + str((process.memory_info().rss) >> 20) + "MB")
 
