@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
-
 import psutil
 import os
 import numpy as np
@@ -11,9 +9,7 @@ from tqdm import tqdm
 import datetime as datetime
 
 
-# ### Data preparation
-
-# In[2]:
+# Data preparation
 process  = psutil.Process(os.getpid())
 
 df_train = pd.read_csv("bpi2017_train.csv", parse_dates = ['time:timestamp'])
@@ -34,10 +30,7 @@ df_val = df_val.drop(['index', 'Unnamed: 0'], axis = 1)
 df_test = df_test.drop(['index', 'Unnamed: 0'], axis = 1)
 
 
-# # 1. Calculate the time difference
-
-# In[3]:
-
+# 1. Calculate the time difference
 
 # Cumulative sum function to be used later
 def CumSum(lists):
@@ -45,10 +38,6 @@ def CumSum(lists):
     length = len(lists)
     cu_list = [sum(lists[0: x: 1]) for x in range(0, length + 1)]
     return cu_list[1: ]
-
-
-# In[4]:
-
 
 def time_difference(df):
     # Calculate time difference between each row
@@ -75,10 +64,6 @@ def time_difference(df):
     df['position'] = step_in_process
     return df
 
-
-# In[5]:
-
-
 # Apply the above changes to all dataframes
 # The warnings are obsolete, it's because it uses .at which is considerably faster than .loc
 df_train = time_difference(df_train)
@@ -86,11 +71,7 @@ df_val = time_difference(df_val)
 df_test = time_difference(df_test)
 
 
-# # 2. Baseline Time Prediction (Only on Training Dataset)
-
-# In[6]:
-
-
+# 2. Baseline Time Prediction (Only on Training Dataset)
 # Get the list of position number
 step_in_process_train = df_train['position'].tolist()
 # Calculate mean time difference grouped by position based on the number of cases
@@ -102,21 +83,13 @@ df_train['baseline_predicted_time'] = pred_time_lst_train
 df_train
 
 
-# # 3. Baseline Case Prediction (only on the training dataset)
-
-# In[7]:
-
-
+# 3. Baseline Case Prediction (only on the training dataset)
 position_df = df_train.groupby('position').agg(pd.Series.mode)['concept:name'].to_frame()
 df_train = pd.merge(df_train, position_df, on='position')
 df_train
 
 
-# # 4. Apply Above Calculated Mean Time to Validation and Test datasets
-
-# In[8]:
-
-
+# 4. Apply Above Calculated Mean Time to Validation and Test datasets
 def apply_time_prediction(df):
     # Get the list of position number
     step_in_process = df['position'].tolist()
@@ -132,20 +105,11 @@ def apply_time_prediction(df):
     df['baseline_predicted_time'] = pred_time_lst
     return df
 
-
-# In[9]:
-
-
 # Apply the above changes to all dataframes
 df_val = apply_time_prediction(df_val)
 df_test = apply_time_prediction(df_test)
 
-
-# # 5. Apply Baseline Case prediction to Validation and Test datasets
-
-# In[10]:
-
-
+# 5. Apply Baseline Case prediction to Validation and Test datasets
 def apply_case_prediction(df: pd.DataFrame) -> pd.DataFrame:
     # Merge the dataframe with position with the dataframe prediction is applied to
     df = pd.merge(df, position_df, on='position')
@@ -158,13 +122,9 @@ def apply_case_prediction(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-
-# In[11]:
-
-
 df_val = apply_case_prediction(df_val)
 df_test = apply_case_prediction(df_test)
 
-print("Total memory memory used: " + str((process.memory_info().rss) >> 20) + " MB")
+print("Total memory memory used: " + str((process.memory_info().rss) >> 20) + "MB")
 
-print("CPU Time:" + str(process.cpu_times().user + process.cpu_times().system))
+print("CPU Time: " + str(process.cpu_times().user + process.cpu_times().system) + "s")
