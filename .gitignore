@@ -4,6 +4,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+.vscode./
+.idea/
+data/bpi_2017.csv
+notebooks/models/BPIC2017_FULL.csv
+
 # C extensions
 *.so
 
@@ -138,3 +143,6 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+/.vscode/
+!/notebooks/models/BPIC2017_FULL.csv
+!/data/bpi_2017.csv
