@@ -4,6 +4,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+*:Zone.Identifier
+
 .vscode./
 .idea/
 data/bpi_2017.csv
