@@ -10,6 +10,8 @@ import warnings
 from functools import partial
 from operator import itemgetter
 
+# import argsparse
+
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import jellyfish as jf
@@ -44,7 +46,11 @@ from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.optimizers import Nadam
 from tqdm import tqdm
 
-
+# For exporting metrics
+f = open("metrics.txt", "w")
+f.write("DBL Process Mining Demo tool v3\n")
+# Reopen with append later
+f.close()
 
 # Supress the warnings
 warnings.filterwarnings(action="ignore")
@@ -67,161 +73,7 @@ orig_val = df_val
 
 result_df = pd.DataFrame()
 
-print("----- RANDOM FOREST -----")
-# Perform conversion
-df_train["Date"] = np.array(
-    df_train["time:timestamp"].values, dtype="datetime64"
-).astype(datetime.datetime)
-df_train["time:unix"] = (df_train["Date"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(
-    "1s"
-)
-df_test["Date"] = np.array(df_test["time:timestamp"].values, dtype="datetime64").astype(
-    datetime.datetime
-)
-df_test["time:unix"] = (df_test["Date"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(
-    "1s"
-)
-df_val["Date"] = np.array(df_val["time:timestamp"].values, dtype="datetime64").astype(
-    datetime.datetime
-)
-df_val["time:unix"] = (df_val["Date"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(
-    "1s"
-)
 
-
-# Assign position
-def assign_position(df: pd.DataFrame) -> pd.DataFrame:
-    # Count number of processes per trace/ID
-    count_lst = df.groupby("case:concept:name").count()["lifecycle:transition"].tolist()
-    position_lst_1 = [list(range(1, i + 1)) for i in count_lst]
-    position_lst = []
-    for i in position_lst_1:
-        for j in i:
-            position_lst.append(j)
-    df["position"] = position_lst
-    return df
-
-
-df_train = assign_position(df_train)
-df_val = assign_position(df_val)
-df_test = assign_position(df_test)
-
-# Define mapping for lifecycle:transition
-mapping_train = {
-    item: i for i, item in enumerate(df_train["lifecycle:transition"].unique())
-}
-mapping_test = {
-    item: i for i, item in enumerate(df_test["lifecycle:transition"].unique())
-}
-mapping_val = {
-    item: i for i, item in enumerate(df_val["lifecycle:transition"].unique())
-}
-
-# Apply mapping
-df_train["transition"] = df_train["lifecycle:transition"].apply(
-    lambda x: mapping_train[x]
-)
-df_test["transition"] = df_test["lifecycle:transition"].apply(lambda x: mapping_test[x])
-df_val["transition"] = df_val["lifecycle:transition"].apply(lambda x: mapping_val[x])
-
-
-# Define mapping for Action
-mapping_train = {item: i for i, item in enumerate(df_train["Action"].unique())}
-mapping_test = {item: i for i, item in enumerate(df_test["Action"].unique())}
-mapping_val = {item: i for i, item in enumerate(df_val["Action"].unique())}
-
-# Apply mapping
-df_train["action"] = df_train["Action"].apply(lambda x: mapping_train[x])
-df_test["action"] = df_test["Action"].apply(lambda x: mapping_test[x])
-df_val["action"] = df_val["Action"].apply(lambda x: mapping_val[x])
-
-
-# Define mapping for case:LoanGoal
-mapping_train = {item: i for i, item in enumerate(df_train["case:LoanGoal"].unique())}
-mapping_test = {item: i for i, item in enumerate(df_test["case:LoanGoal"].unique())}
-mapping_val = {item: i for i, item in enumerate(df_val["case:LoanGoal"].unique())}
-
-# Apply mapping
-df_train["goal"] = df_train["case:LoanGoal"].apply(lambda x: mapping_train[x])
-df_test["goal"] = df_test["case:LoanGoal"].apply(lambda x: mapping_test[x])
-df_val["goal"] = df_val["case:LoanGoal"].apply(lambda x: mapping_val[x])
-
-
-# Define mapping for case:LoanGoal
-mapping_train = {
-    item: i for i, item in enumerate(df_train["case:ApplicationType"].unique())
-}
-mapping_test = {
-    item: i for i, item in enumerate(df_test["case:ApplicationType"].unique())
-}
-mapping_val = {
-    item: i for i, item in enumerate(df_val["case:ApplicationType"].unique())
-}
-
-# Apply mapping
-df_train["type"] = df_train["case:ApplicationType"].apply(lambda x: mapping_train[x])
-df_test["type"] = df_test["case:ApplicationType"].apply(lambda x: mapping_test[x])
-df_val["type"] = df_val["case:ApplicationType"].apply(lambda x: mapping_val[x])
-
-df_1 = df_train.copy()
-df_2 = df_val.copy()
-# Define predictors
-predictors = ["time:unix", "transition", "type", "action"]
-# worse accuracy (compared to only using time:unix and transition): position, goal
-# better accuracy (---): action, type
-
-# Define the classifier
-rfc = RandomForestClassifier(n_estimators=50)
-
-# Fit the model
-rfc.fit(df_1[predictors], df_1["concept:name"])
-pred_val = rfc.predict(df_2[predictors])
-df_2["predicted_action"] = pred_val
-#
-actions_taken = df_2["concept:name"]
-actions_taken = actions_taken[1:]
-
-actions_pred = df_2["predicted_action"]
-actions_pred = actions_pred[:-1]
-
-test = pd.concat([actions_taken, actions_pred], axis=1)
-test.dropna(axis=0, inplace=True)
-
-predictors = ["time:unix", "transition", "type", "action"]
-
-pred_test = rfc.predict(df_test[predictors])
-pred_val = rfc.predict(df_val[predictors])
-
-result_df["time:timestamp"] = df_test["time:timestamp"]
-result_df["Event"] = df_test["concept:name"]
-result_df["Random_forest_pred"] = pred_test
-
-df_test["predicted_action"] = pred_test
-df_val["predicted_action"] = pred_val
-
-actions_taken = df_val["concept:name"]
-actions_taken = actions_taken[1:]
-
-actions_pred = df_val["predicted_action"]
-actions_pred = actions_pred[:-1]
-
-test = pd.concat([actions_taken, actions_pred], axis=1)
-test.dropna(axis=0, inplace=True)
-
-print(
-    "RANDOM FOREST ACCURACY: ",
-    str(
-        round(
-            metrics.accuracy_score(test["concept:name"], test["predicted_action"])
-            * 100,
-            2,
-        )
-    ),
-    "%",
-)
-
-# 5s pause to examine the metrics
-time.sleep(5)
 
 print("----- LOGISTIC REGRESSION -----")
 df_train = orig_train
@@ -351,17 +203,16 @@ dict_concept_name = {keys[i]: codes[i] for i in range(len(codes))}
 df_test["predicted_event_name"] = X_test["Action"].map(dict_concept_name)
 result_df["log_reg_pred"] = df_test["predicted_event_name"]
 
+metrics_out = open("metrics.txt", "a")
+logistic_regression_acc = str(round(metrics.accuracy_score(df_test["predicted_action"], df_test["true_action"]) * 100, 2))
+metrics_out.write("Logistic regression accuracy: " + logistic_regression_acc + "%\n")
+
 print(
     "LOGISTIC REGRESSION ACCURACY:",
-    str(
-        round(
-            metrics.accuracy_score(df_test["predicted_action"], df_test["true_action"])
-            * 100,
-            2,
-        )
-    ),
+    logistic_regression_acc,
     "%",
 )
+
 time.sleep(5)
 
 print("----- SVM REGRESSION ------")
@@ -520,7 +371,9 @@ compare_predictions["diff"] = (
     compare_predictions["true"] - compare_predictions["predicted"]
 )
 
-print("SVM ACCURACY:", str(round(abs(regr.score(X_test, y_test) * 100), 2)), "%")
+svm_acc = str(round(abs(regr.score(X_test, y_test) * 100), 2))
+metrics_out.write("SVM Accuracy: " + svm_acc + "%\n")
+print("SVM ACCURACY:", svm_acc , "%")
 
 time.sleep(5)
 
@@ -662,8 +515,10 @@ ereg = VotingRegressor(
 ereg.fit(X_train, y_train)
 voting_pred = ereg.predict(X_test)
 result_df["voting_pred"] = voting_pred
+vregress_acc = str(round(ereg.score(X_train, y_train), 2))
 
-print("VOTING REGRESSION ACURACCY: ", str(round(ereg.score(X_train, y_train), 2)), "%")
+metrics_out.write("Voting regression acurracy:" + str(round(ereg.score(X_train, y_train), 2)) + "%\n")
+print("VOTING REGRESSION ACURRACY: ", vregress_acc, "%")
 time.sleep(5)
 
 print("----- MM-PRED -----")
@@ -2037,6 +1892,8 @@ for elem in acc:
 print("MM-PRED METRICS")
 print(f"ACCURACY: {round((sum / total)*100,2)} %")
 
+metrics_out.write("MM-PRED Accuracy: " + str(round((sum / total)*100,2)) + "\n")
+
 # Precision
 correct_predicted = {}
 total_predicted = {}
@@ -2093,6 +1950,8 @@ for elem in acc:
 print(f"RECALL: {round((sum / len(acc))*100,2)} %")
 
 result_df["MM-PRED"] = pd.Series(predicted_vals)
+
+metrics_out.close()
 
 # Save the results
 result_df.to_csv("tool_v3_predictions.csv")
