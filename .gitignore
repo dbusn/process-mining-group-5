@@ -6,6 +6,10 @@ __pycache__/
 
 *:Zone.Identifier
 
+*.h5
+*.zip
+*.csv
+
 .vscode./
 .idea/
 data/bpi_2017.csv

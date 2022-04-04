@@ -10,8 +10,6 @@ import warnings
 from functools import partial
 from operator import itemgetter
 
-# import argsparse
-
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import jellyfish as jf
@@ -30,9 +28,12 @@ from keras.callbacks import ModelCheckpoint
 from keras.models import Sequential, load_model
 from scipy.stats import pearsonr
 from sklearn import metrics
-from sklearn.ensemble import (GradientBoostingRegressor,
-                              RandomForestClassifier, RandomForestRegressor,
-                              VotingRegressor)
+from sklearn.ensemble import (
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+    VotingRegressor,
+)
 from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.pipeline import make_pipeline
@@ -40,8 +41,16 @@ from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
 from sklearn.svm import SVR
 from tensorflow import concat, matmul, multiply, sigmoid, transpose
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from tensorflow.keras.layers import (LSTM, BatchNormalization, Concatenate,
-                                     Dense, Dropout, Embedding, Input, Layer)
+from tensorflow.keras.layers import (
+    LSTM,
+    BatchNormalization,
+    Concatenate,
+    Dense,
+    Dropout,
+    Embedding,
+    Input,
+    Layer,
+)
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.optimizers import Nadam
 from tqdm import tqdm
@@ -73,6 +82,184 @@ orig_val = df_val
 
 result_df = pd.DataFrame()
 
+print("----- RANDOM FOREST -----")
+# Perform conversion
+df_train["Date"] = np.array(
+    df_train["time:timestamp"].values, dtype="datetime64"
+).astype(datetime.datetime)
+df_train["time:unix"] = (df_train["Date"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(
+    "1s"
+)
+df_test["Date"] = np.array(df_test["time:timestamp"].values, dtype="datetime64").astype(
+    datetime.datetime
+)
+df_test["time:unix"] = (df_test["Date"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(
+    "1s"
+)
+df_val["Date"] = np.array(df_val["time:timestamp"].values, dtype="datetime64").astype(
+    datetime.datetime
+)
+df_val["time:unix"] = (df_val["Date"] - pd.Timestamp("1970-01-01")) // pd.Timedelta(
+    "1s"
+)
+
+
+# Assign position
+def assign_position(df: pd.DataFrame) -> pd.DataFrame:
+    # Count number of processes per trace/ID
+    count_lst = df.groupby("case:concept:name").count()["lifecycle:transition"].tolist()
+    position_lst_1 = [list(range(1, i + 1)) for i in count_lst]
+    position_lst = []
+    for i in position_lst_1:
+        for j in i:
+            position_lst.append(j)
+    df["position"] = position_lst
+    return df
+
+
+df_train = assign_position(df_train)
+df_val = assign_position(df_val)
+df_test = assign_position(df_test)
+
+# Define mapping for lifecycle:transition
+mapping_train = {
+    item: i for i, item in enumerate(df_train["lifecycle:transition"].unique())
+}
+mapping_test = {
+    item: i for i, item in enumerate(df_test["lifecycle:transition"].unique())
+}
+mapping_val = {
+    item: i for i, item in enumerate(df_val["lifecycle:transition"].unique())
+}
+
+# Apply mapping
+df_train["transition"] = df_train["lifecycle:transition"].apply(
+    lambda x: mapping_train[x]
+)
+df_test["transition"] = df_test["lifecycle:transition"].apply(lambda x: mapping_test[x])
+df_val["transition"] = df_val["lifecycle:transition"].apply(lambda x: mapping_val[x])
+
+
+# Define mapping for Action
+mapping_train = {item: i for i, item in enumerate(df_train["Action"].unique())}
+mapping_test = {item: i for i, item in enumerate(df_test["Action"].unique())}
+mapping_val = {item: i for i, item in enumerate(df_val["Action"].unique())}
+
+# Apply mapping
+df_train["action"] = df_train["Action"].apply(lambda x: mapping_train[x])
+df_test["action"] = df_test["Action"].apply(lambda x: mapping_test[x])
+df_val["action"] = df_val["Action"].apply(lambda x: mapping_val[x])
+
+
+# Define mapping for case:LoanGoal
+mapping_train = {item: i for i, item in enumerate(df_train["case:LoanGoal"].unique())}
+mapping_test = {item: i for i, item in enumerate(df_test["case:LoanGoal"].unique())}
+mapping_val = {item: i for i, item in enumerate(df_val["case:LoanGoal"].unique())}
+
+# Apply mapping
+df_train["goal"] = df_train["case:LoanGoal"].apply(lambda x: mapping_train[x])
+df_test["goal"] = df_test["case:LoanGoal"].apply(lambda x: mapping_test[x])
+df_val["goal"] = df_val["case:LoanGoal"].apply(lambda x: mapping_val[x])
+
+
+# Define mapping for case:LoanGoal
+mapping_train = {
+    item: i for i, item in enumerate(df_train["case:ApplicationType"].unique())
+}
+mapping_test = {
+    item: i for i, item in enumerate(df_test["case:ApplicationType"].unique())
+}
+mapping_val = {
+    item: i for i, item in enumerate(df_val["case:ApplicationType"].unique())
+}
+
+# Apply mapping
+df_train["type"] = df_train["case:ApplicationType"].apply(lambda x: mapping_train[x])
+df_test["type"] = df_test["case:ApplicationType"].apply(lambda x: mapping_test[x])
+df_val["type"] = df_val["case:ApplicationType"].apply(lambda x: mapping_val[x])
+
+df_1 = df_train.copy()
+df_2 = df_val.copy()
+# Define predictors
+predictors = ["time:unix", "transition", "type", "action"]
+# worse accuracy (compared to only using time:unix and transition): position, goal
+# better accuracy (---): action, type
+
+# Define the classifier
+rfc = RandomForestClassifier(n_estimators=50)
+
+# Fit the model
+rfc.fit(df_1[predictors], df_1["concept:name"])
+pred_val = rfc.predict(df_2[predictors])
+df_2["predicted_action"] = pred_val
+#
+actions_taken = df_2["concept:name"]
+actions_taken = actions_taken[1:]
+
+actions_pred = df_2["predicted_action"]
+actions_pred = actions_pred[:-1]
+
+test = pd.concat([actions_taken, actions_pred], axis=1)
+test.dropna(axis=0, inplace=True)
+
+predictors = ["time:unix", "transition", "type", "action"]
+
+pred_test = rfc.predict(df_test[predictors])
+pred_val = rfc.predict(df_val[predictors])
+
+result_df["time:timestamp"] = df_test["time:timestamp"]
+result_df["Event"] = df_test["concept:name"]
+result_df["Random_forest_pred"] = pred_test
+
+df_test["predicted_action"] = pred_test
+df_val["predicted_action"] = pred_val
+
+actions_taken = df_val["concept:name"]
+actions_taken = actions_taken[1:]
+
+actions_pred = df_val["predicted_action"]
+actions_pred = actions_pred[:-1]
+
+test = pd.concat([actions_taken, actions_pred], axis=1)
+test.dropna(axis=0, inplace=True)
+
+random_forest_acc = str(
+    round(
+        metrics.accuracy_score(test["concept:name"], test["predicted_action"]) * 100, 2,
+    )
+)
+# random_forest_mae = str(
+#     round(
+#         metrics.mean_absolute_error(test["concept:name"], test["predicted_action"]), 2,
+#     )
+# )
+# random_forest_rmse = str(
+#     round(
+#         metrics.mean_squared_error(
+#             test["concept:name"], test["predicted_action"], squared=False
+#         ),
+#         2,
+#     )
+# )
+
+metrics_out = open("metrics.txt", "a")
+
+metrics_out.write("Random forest accuracy: " + random_forest_acc + "%\n")
+# metrics_out.write("Random forest mean absolute error: " + random_forest_mae + "\n")
+# metrics_out.write("Random forest RMSE: " + random_forest_rmse + "\n")
+
+print(
+    "RANDOM FOREST ACCURACY: ", random_forest_acc, "%",
+)
+
+# print(
+#     "RANDOM FOREST MEAN ABSOLUTE ERROR: ", random_forest_mae, "%",
+# )
+
+# print("RANDOM FOREST RMSE: ", random_forest_rmse, "%")
+
+# 5s pause to examine the metrics
+time.sleep(5)
 
 
 print("----- LOGISTIC REGRESSION -----")
@@ -203,15 +390,45 @@ dict_concept_name = {keys[i]: codes[i] for i in range(len(codes))}
 df_test["predicted_event_name"] = X_test["Action"].map(dict_concept_name)
 result_df["log_reg_pred"] = df_test["predicted_event_name"]
 
-metrics_out = open("metrics.txt", "a")
-logistic_regression_acc = str(round(metrics.accuracy_score(df_test["predicted_action"], df_test["true_action"]) * 100, 2))
+logistic_regression_acc = str(
+    round(
+        metrics.accuracy_score(df_test["predicted_action"], df_test["true_action"])
+        * 100,
+        2,
+    )
+)
+logistic_regression_mae = str(
+    round(
+        metrics.mean_absolute_error(
+            df_test["predicted_action"], df_test["true_action"]
+        ),
+        2,
+    )
+)
+logistic_regression_rmse = str(
+    round(
+        metrics.mean_squared_error(
+            df_test["predicted_action"], df_test["true_action"], squared=False
+        ),
+        2,
+    )
+)
+
+
 metrics_out.write("Logistic regression accuracy: " + logistic_regression_acc + "%\n")
+metrics_out.write("Logistic regression MAE: " + logistic_regression_mae + "\n")
+metrics_out.write("Logistic regression RMSE: " + logistic_regression_rmse + "\n")
+
 
 print(
-    "LOGISTIC REGRESSION ACCURACY:",
-    logistic_regression_acc,
-    "%",
+    "LOGISTIC REGRESSION ACCURACY:", logistic_regression_acc, "%",
 )
+
+print(
+    "LOGISTIC REGRESSION MEAN ABSOLUTE ERROR:", logistic_regression_mae,
+)
+
+print("LOGISTIC REGRESION RMSE:", logistic_regression_rmse)
 
 time.sleep(5)
 
@@ -372,8 +589,20 @@ compare_predictions["diff"] = (
 )
 
 svm_acc = str(round(abs(regr.score(X_test, y_test) * 100), 2))
+svm_mae = str(round(metrics.mean_absolute_error(predictions, y_test[:n]), 2))
+svm_rmse = str(
+    round(metrics.mean_squared_error(predictions, y_test[:n], squared=False), 2)
+)
+
+
 metrics_out.write("SVM Accuracy: " + svm_acc + "%\n")
-print("SVM ACCURACY:", svm_acc , "%")
+metrics_out.write("SVM MAE: " + svm_mae + "\n")
+metrics_out.write("SVM RMSE: " + svm_rmse + "\n")
+
+
+print("SVM ACCURACY:", svm_acc, "%")
+print("SVM MAE:", svm_mae)
+print("SVM RMSE:", svm_rmse)
 
 time.sleep(5)
 
@@ -515,13 +744,28 @@ ereg = VotingRegressor(
 ereg.fit(X_train, y_train)
 voting_pred = ereg.predict(X_test)
 result_df["voting_pred"] = voting_pred
-vregress_acc = str(round(ereg.score(X_train, y_train), 2))
 
-metrics_out.write("Voting regression acurracy:" + str(round(ereg.score(X_train, y_train), 2)) + "%\n")
+vregress_acc = str(round(ereg.score(X_train, y_train), 2))
+vreg_mae = str(round(metrics.mean_absolute_error(predictions, y_test[:n]), 2))
+vreg_rmse = str(
+    round(metrics.mean_squared_error(predictions, y_test[:n], squared=False), 2)
+)
+
+
+metrics_out.write("Voting regression acurracy:" + vregress_acc + "%\n")
+metrics_out.write("Voting regression MAE:" + vreg_mae + "\n")
+metrics_out.write("Voting regression RMSE:" + vreg_rmse + "\n")
+
+
 print("VOTING REGRESSION ACURRACY: ", vregress_acc, "%")
+print("VOTING REGRESSION MAE: ", vreg_mae)
+print("VOTING REGRESSION RMSE: ", vreg_rmse)
+
 time.sleep(5)
 
 print("----- MM-PRED -----")
+
+
 class LogFile:
     def __init__(
         self,
@@ -1836,6 +2080,7 @@ def train(logfile, train_log, model_folder):
         model_folder,
     )
 
+
 def train(log, epochs=200, early_stop=42):
     return create_model(log, "tmp", epochs, early_stop)
 
@@ -1892,7 +2137,7 @@ for elem in acc:
 print("MM-PRED METRICS")
 print(f"ACCURACY: {round((sum / total)*100,2)} %")
 
-metrics_out.write("MM-PRED Accuracy: " + str(round((sum / total)*100,2)) + "\n")
+metrics_out.write("MM-PRED Accuracy: " + str(round((sum / total) * 100, 2)) + "\n")
 
 # Precision
 correct_predicted = {}
