@@ -6,6 +6,7 @@ import math
 import multiprocessing as mp
 import os
 import time
+import re
 import warnings
 from functools import partial
 from operator import itemgetter
@@ -40,7 +41,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
 from sklearn.svm import SVR
 from tensorflow import concat, matmul, multiply, sigmoid, transpose
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras.layers import (
     LSTM,
     BatchNormalization,
@@ -53,6 +54,7 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.optimizers import Nadam
+from tensorflow.keras.optimizers import Nadam as nadam_v2
 from tqdm import tqdm
 
 # For exporting metrics
@@ -752,9 +754,9 @@ vreg_rmse = str(
 )
 
 
-metrics_out.write("Voting regression acurracy:" + vregress_acc + "%\n")
-metrics_out.write("Voting regression MAE:" + vreg_mae + "\n")
-metrics_out.write("Voting regression RMSE:" + vreg_rmse + "\n")
+metrics_out.write("Voting regression acurracy: " + vregress_acc + "%\n")
+metrics_out.write("Voting regression MAE: " + vreg_mae + "\n")
+metrics_out.write("Voting regression RMSE: " + vreg_rmse + "\n")
 
 
 print("VOTING REGRESSION ACURRACY: ", vregress_acc, "%")
@@ -763,6 +765,263 @@ print("VOTING REGRESSION RMSE: ", vreg_rmse)
 
 time.sleep(5)
 
+print("----- RNN -----")
+
+df_train = pd.read_csv("bpi2017_train_filtered.csv",  parse_dates = ['time:timestamp'])
+df_val = pd.read_csv("bpi2017_val_filtered.csv", parse_dates = ['time:timestamp'])
+df_test = pd.read_csv("bpi2017_test_filtered.csv", parse_dates= ['time:timestamp'])
+
+df_train = df_train[:n]
+df_val = df_val[:n]
+df_test = df_test[:n]
+
+df_train = df_train.sort_values(by = ['case:concept:name', 'time:timestamp']).reset_index(drop = True)
+df_val = df_val.sort_values(by = ['case:concept:name', 'time:timestamp']).reset_index(drop = True)
+df_test = df_test.sort_values(by = ['case:concept:name', 'time:timestamp']).reset_index(drop = True)
+
+# Global Feature 1
+
+df_train["case_occurrence_nr"] = df_train.groupby(['case:concept:name'])['time:timestamp'].cumcount().tolist()
+df_val["case_occurrence_nr"] = df_val.groupby(['case:concept:name'])['time:timestamp'].cumcount().tolist()
+df_test["case_occurrence_nr"] = df_test.groupby(['case:concept:name'])['time:timestamp'].cumcount().tolist()
+
+min_max_scaler_occur = MinMaxScaler()
+df_train['nor_case_occurrence_nr'] = min_max_scaler_occur.fit_transform(np.array(df_train['case_occurrence_nr']).reshape(-1, 1))
+df_val['nor_case_occurrence_nr'] = min_max_scaler_occur.transform(np.array(df_val['case_occurrence_nr']).reshape(-1, 1))
+df_test['nor_case_occurrence_nr'] = min_max_scaler_occur.transform(np.array(df_test['case_occurrence_nr']).reshape(-1, 1))
+
+# Global Feature 2
+
+def case_in_hr(df):
+    df['date'] = df['time:timestamp'].dt.date
+    df['hour'] = df['time:timestamp'].dt.hour
+    df_1 = df.groupby(['date', 'hour']).count()[['case:concept:name']].reset_index()
+    df_1.rename(columns = {'case:concept:name': 'case_nr_per_hr'}, inplace = True)
+    df = pd.merge(df, df_1, on = ['date', 'hour'], how = "left")
+    df.drop(columns = ['date', 'hour'], inplace = True)
+    return df
+
+df_train = case_in_hr(df_train)
+df_val = case_in_hr(df_val)
+df_test = case_in_hr(df_test)
+
+min_max_scaler_case = MinMaxScaler()
+df_train['nor_case_nr_per_hr'] = min_max_scaler_case.fit_transform(np.array(df_train['case_nr_per_hr']).reshape(-1, 1))
+df_val['nor_case_nr_per_hr'] = min_max_scaler_case.transform(np.array(df_val['case_nr_per_hr']).reshape(-1, 1))
+df_test['nor_case_nr_per_hr'] = min_max_scaler_case.transform(np.array(df_test['case_nr_per_hr']).reshape(-1, 1))
+
+#  Normalize time difference so that the time difference's value is within 0 and 1
+min_max_scaler = MinMaxScaler()
+df_train['nor_future_time_diff'] = min_max_scaler.fit_transform(np.array(df_train['future_time_diff']).reshape(-1, 1))
+# Use the range from training data on validation and test data
+df_val['nor_future_time_diff'] = min_max_scaler.transform(np.array(df_val['future_time_diff']).reshape(-1, 1))
+df_test['nor_future_time_diff'] = min_max_scaler.transform(np.array(df_test['future_time_diff']).reshape(-1, 1))
+
+df_old = pd.read_csv("bpi2017_train_filtered.csv", parse_dates = ['time:timestamp'])
+df_old = df_old[:n]
+
+def onehot_now(df):
+    # Extract categorical and numerical variables
+    df_cat = df[['concept:name', 'lifecycle:transition', 'EventOrigin', 'Action']]
+    df_num = df[['nor_time_since_last_event', 'nor_time_since_case_starts', 'nor_time_since_midnight', 'nor_time_since_week_start', 'position', 'nor_case_occurrence_nr', 'nor_case_nr_per_hr']]
+    # Convert categorical variable columns to one-hot encoding (A large matrix with dummy variables is made)
+    enc = OneHotEncoder(handle_unknown = 'ignore', sparse = False)
+    enc.fit(df_old[['concept:name', 'lifecycle:transition', 'EventOrigin', 'Action']])
+    transformed = enc.transform(df_cat)
+    # Create a dataframe using the newly created matrix
+    df_ohe = pd.DataFrame(transformed, columns = enc.get_feature_names())
+    # Combine dummy dataframe with numerical dataframe
+    df_ohe = pd.concat([df_ohe, df_num], axis = 1)
+    return df_ohe
+
+df_train_now = onehot_now(df_train)
+df_val_now = onehot_now(df_val)
+df_test_now = onehot_now(df_test)
+
+enc = OneHotEncoder(handle_unknown = 'ignore', sparse = False)
+enc.fit(df_old[['next:concept:name']])
+df_train_next = enc.transform(df_train[['next:concept:name']])
+df_val_next = enc.transform(df_val[['next:concept:name']])
+df_test_next = enc.transform(df_test[['next:concept:name']])
+
+# Source: https://towardsdatascience.com/how-to-reshape-data-and-do-regression-for-time-series-using-lstm-133dad96cd00
+
+def lstm_data_transform(x_data, y_data_1, y_data_2, num_steps):
+    # Reshape the feature array to (621131, 27, 1) so that it fulfills the format requirement of LSTM (Number Of Examples, Time Steps, Features Per Step)
+    # Slide window approach to prevent throwing data away
+    # Prepare the list for the transformed data
+    X, y_1, y_2 = list(), list(), list()
+    # Loop of the entire data set
+    for i in range(x_data.shape[0]):
+        # Compute a new (sliding window) index
+        end = i + num_steps
+        # If index is larger than the size of the dataset, we stop
+        if end >= x_data.shape[0]:
+            break
+        # Get a sequence of data for x
+        seq_X = x_data[i: end]
+        # Get only the last element of the sequency for y
+        seq_y_1 = y_data_1[end]
+        seq_y_2 = y_data_2[end]
+        # Append the list with sequencies
+        X.append(seq_X)
+        y_1.append(seq_y_1)
+        y_2.append(seq_y_2)
+    # Make final arrays
+    x_array = np.array(X)
+    y_array_1 = np.array(y_1)
+    y_array_2 = np.array(y_2)
+    return x_array, y_array_1, y_array_2
+
+def zero_row(df, df_now, df_next, time_step):
+    # Convert all required data from dataframe to numpy arrays
+    case_lst = df['case:concept:name'].unique().tolist()
+    x = df_now.to_numpy()
+    y_1 = df_next
+    y_2 = df[['nor_future_time_diff']].to_numpy()
+
+    new_x = []
+    new_y_1 = []
+    new_y_2 = []
+
+    for i in tqdm(case_lst):
+        index_lst = df[df['case:concept:name'] == i].index
+        # Create rows with just 0 at the beginning so that number of samples after sliding window matches the actual sample size, and no future data is used
+        x_a = x[index_lst[0]: index_lst[-1] + 1, : ]
+        y_1_a = y_1[index_lst[0]: index_lst[-1] + 1, : ]
+        y_2_a = y_2[index_lst[0]: index_lst[-1] + 1, : ]
+        x_0 = np.zeros((time_step, x_a.shape[1]), dtype = float)
+        y_0_1 = np.zeros((time_step, y_1_a.shape[1]), dtype = float)
+        y_0_2 = np.zeros((time_step, y_2_a.shape[1]), dtype = float)
+        x_a = np.concatenate((x_0, x_a))
+        y_1_a = np.concatenate((y_0_1, y_1_a))
+        y_2_a = np.concatenate((y_0_2, y_2_a))
+        x_a, y_1_a, y_2_a = lstm_data_transform(x_a, y_1_a, y_2_a, time_step)
+        new_x.append(x_a)
+        new_y_1.append(y_1_a)
+        new_y_2.append(y_2_a)
+    
+    actual_x = []
+    actual_y_1 = []
+    actual_y_2 = []
+    
+    for i in new_x:
+        for j in i:
+            actual_x.append(j)
+    for i in new_y_1:
+        for j in i:
+            actual_y_1.append(j)
+    for i in new_y_2:
+        for j in i:
+            actual_y_2.append(j)
+
+    return np.asarray(actual_x), np.asarray(actual_y_1), np.asarray(actual_y_2)
+
+time_step = 3 # Your chosen batch-size/timestep
+
+x_train, y_train_event, y_train_time = zero_row(df_train, df_train_now, df_train_next, time_step)
+x_val, y_val_event, y_val_time = zero_row(df_val, df_val_now, df_val_next, time_step)
+x_test, y_test_event, y_test_time = zero_row(df_test, df_test_now, df_test_next, time_step)
+
+epoch_nr = 20
+
+device_name = tf.test.gpu_device_name()
+
+def train(link):
+    with tf.device(device_name):
+        if link == 'Nil':
+            # build the model: 
+            main_input = Input(shape = (time_step, df_train_now.shape[1]), name = 'main_input')
+
+            # train a 2-layer LSTM with one shared layer
+            l1 = LSTM(100, implementation = 2, kernel_initializer = 'glorot_uniform', return_sequences = True, dropout = 0.2)(main_input) # the shared layer
+            b1 = BatchNormalization()(l1)
+            l2_1 = LSTM(100, implementation = 2, kernel_initializer = 'glorot_uniform', return_sequences = False, dropout = 0.2)(b1) # the layer specialized in activity prediction
+            b2_1 = BatchNormalization()(l2_1)
+            l2_2 = LSTM(100, implementation = 2, kernel_initializer = 'glorot_uniform', return_sequences = False, dropout = 0.2)(b1) # the layer specialized in time prediction
+            b2_2 = BatchNormalization()(l2_2)
+            act_output = Dense(len(df_train['next:concept:name'].unique().tolist()), activation = 'softmax', kernel_initializer = 'glorot_uniform', name = 'act_output')(b2_1)
+            time_output = Dense(1, kernel_initializer = 'glorot_uniform', name = 'time_output')(b2_2)  
+
+            model = Model(inputs = [main_input], outputs = [act_output, time_output])
+
+            opt = Nadam(learning_rate = 0.002, beta_1 = 0.9, beta_2 = 0.999, epsilon = 1e-08, schedule_decay = 0.004, clipvalue = 3)
+
+            # The loss used in model training is mean_squared_error because it is time prediction
+            # The optimizer is Nadam
+            model.compile(loss = {'act_output':'categorical_crossentropy', 'time_output': 'mae'}, optimizer = opt)
+            return model
+        else:
+            model = load_model(link)
+
+        # Save the best model
+        early_stopping = EarlyStopping(monitor = 'val_loss', patience = 42)
+        checkpoint_filepath = '/content/drive/MyDrive/Process Mining RNN/model/weights.{epoch:02d}.h5'
+        model_checkpoint_callback = ModelCheckpoint(filepath = checkpoint_filepath, monitor = 'val_loss', mode = 'min', save_best_only = True)
+        lr_reducer = ReduceLROnPlateau(monitor = 'val_loss', factor = 0.5, patience = 10, verbose = 0, mode = 'auto', min_delta = 0.0001, cooldown = 0, min_lr = 0)
+
+        # Fit the model with 20 epoches and batch size 64
+        # Validation data is used here for evaluation during the training process
+        model.fit(x_train, {'act_output': y_train_event, 'time_output': y_train_time}, validation_data = (x_val, {'act_output': y_val_event, 'time_output': y_val_time}), epochs = epoch_nr, batch_size = 128, callbacks = [early_stopping, model_checkpoint_callback, lr_reducer])
+        return model
+
+model = train('Nil')
+
+# Make predictions
+train_predict_event, train_predict_time = model.predict(x_train)
+val_predict_event, val_predict_time = model.predict(x_val)
+test_predict_event, test_predict_time = model.predict(x_test)
+
+# Obtain event predictions from the highest probability of the label found, then find its label string name
+train_pred_event_lst = enc.get_feature_names()[np.argmax(train_predict_event, axis = 1)]
+train_pred_event_lst = [i.replace('x0_', '') for i in train_pred_event_lst]
+val_pred_event_lst = enc.get_feature_names()[np.argmax(val_predict_event, axis = 1)]
+val_pred_event_lst = [i.replace('x0_', '') for i in val_pred_event_lst]
+test_pred_event_lst = enc.get_feature_names()[np.argmax(test_predict_event, axis = 1)]
+test_pred_event_lst = [i.replace('x0_', '') for i in test_pred_event_lst]
+
+df_train['RNN_next_event'] = train_pred_event_lst
+df_val['RNN_next_event'] = val_pred_event_lst
+df_test['RNN_next_event'] = test_pred_event_lst
+
+# Invert time predictions from min-max scaling to their actual value
+train_predict_time = min_max_scaler.inverse_transform(train_predict_time)
+val_predict_time = min_max_scaler.inverse_transform(val_predict_time)
+test_predict_time = min_max_scaler.inverse_transform(test_predict_time)
+
+train_pred_time_lst = train_predict_time[: , 0].tolist()
+val_pred_time_lst = val_predict_time[: , 0].tolist()
+test_pred_time_lst = test_predict_time[: , 0].tolist()
+
+df_train['RNN_time_diff'] = train_pred_time_lst
+df_val['RNN_time_diff'] = val_pred_time_lst
+df_test['RNN_time_diff'] = test_pred_time_lst
+
+train_true = df_train['future_time_diff'].tolist()
+val_true = df_val['future_time_diff'].tolist()
+test_true = df_test['future_time_diff'].tolist()
+
+train_rnn = df_train['RNN_time_diff'].tolist()
+val_rnn = df_val['RNN_time_diff'].tolist()
+test_rnn = df_test['RNN_time_diff'].tolist()
+
+# rnn_acc =  str(round(metrics.accuracy_score(test_true, test_rnn), 2))
+rnn_mae = str(round(metrics.mean_absolute_error(test_true, test_rnn), 2))
+rnn_rmse = str(round(metrics.mean_squared_error(test_true, test_rnn, squared=False), 2))
+
+# metrics_out.write("RNN Accuracy: " + rnn_acc + " %\n")
+metrics_out.write("RNN MAE: " + rnn_mae + "\n")
+metrics_out.write("RNN RMSE: "  + rnn_rmse + "\n")
+
+
+print("RNN METRICS")
+# print("RNN ACCURACY: " + rnn_acc + " %")
+print("RNN MAE: " + rnn_mae)
+print("RNN RMSE: " + rnn_rmse)
+
+result_df["RNN Predictions"] = df_test['future_time_diff'].tolist()
+
+time.sleep(5)
 print("----- MM-PRED -----")
 
 
@@ -2137,7 +2396,7 @@ for elem in acc:
 print("MM-PRED METRICS")
 print(f"ACCURACY: {round((sum / total)*100,2)} %")
 
-metrics_out.write("MM-PRED Accuracy: " + str(round((sum / total) * 100, 2)) + "\n")
+metrics_out.write("MM-PRED Accuracy: " + str(round((sum / total) * 100, 2)) + "%\n")
 
 # Precision
 correct_predicted = {}
