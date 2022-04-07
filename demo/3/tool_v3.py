@@ -84,8 +84,176 @@ orig_val = df_val
 
 result_df = pd.DataFrame()
 
+def convert_timestamps(df_train, df_test, df_val):
+    df_train["time:timestamp"] = np.array(df_train["time:timestamp"].values, dtype="datetime64").astype(datetime.datetime)
+
+    df_test["time:timestamp"] = np.array(df_test["time:timestamp"].values, dtype="datetime64").astype(datetime.datetime)
+
+    df_val["time:timestamp"] = np.array(df_val["time:timestamp"].values, dtype="datetime64").astype(datetime.datetime)
+
+    return df_train, df_test, df_val
+
+print("----- BASELINE ALGORITHM A -----")
+
+df_train, df_test, df_val = convert_timestamps(df_train, df_test, df_val)
+
+def assign_position(df: pd.DataFrame) -> pd.DataFrame:
+    # Count number of processes per trace/ID
+    count_lst = df.groupby('case:concept:name').count()['lifecycle:transition'].tolist()
+    position_lst_1 = [list(range(1, i + 1)) for i in count_lst]
+    position_lst = []
+    for i in position_lst_1:
+        for j in i:
+            position_lst.append(j)
+    df['position'] = position_lst
+    return df
+
+df_train = assign_position(df_train)
+df_val = assign_position(df_val)
+df_test = assign_position(df_test)
+
+position_df = df_train.groupby('position').agg(pd.Series.mode)['concept:name'].to_frame()
+# for positions where mode has > 1 position name, save only the 1st one to the column 'one'
+position_df['one'] = position_df['concept:name'].copy()
+
+for i in range(1, len(position_df)):
+  if type(position_df['concept:name'].loc[i])!= str:
+    position_df['one'].loc[i] = position_df['concept:name'].loc[i][0]
+
+
+df_train = pd.merge(df_train, position_df, on='position')
+
+
+
+# Count number of processes per trace/ID
+df_val = pd.merge(df_val, position_df, on='position')
+
+df_val.sort_values(by=['time:timestamp'], inplace=True)
+df_val.rename(columns = {"concept:name_y":"baseline_action_pred", "concept:name_x":"concept:name"}, inplace=True)
+
+df_test = pd.merge(df_test, position_df, on="position")
+df_test.sort_values(by=['time:timestamp'], inplace=True)
+df_test.rename(columns={"concept:name_y":"baseline_action_pred", "concept:name_x":"concept:name"}, inplace=True)
+
+# calculate what proportion of predictions is correct
+accuracy_test = len(df_test[df_test['concept:name'] == df_test['one']]) / len(df_test)
+
+metrics_out = open("metrics.txt" ,"a")
+metrics_out.write("Baselline algorithm A Accuracy: " +  str(round(accuracy_test, 2)) + " %")
+
+result_df["Baseline A"] = df_test['concept:name']
+
+print('BASELINE ALGORITHM A ACCURACY: ', accuracy_test, " %")
+time.sleep(5)
+
+print("----- BASELINE ALGORITHM B -----")
+
+df_train = orig_train
+df_test = orig_test
+df_val = orig_val
+
+df_train["time:timestamp"] = df_train["time:timestamp"].astype(dtype="datetime64")
+df_test["time:timestamp"] = df_test["time:timestamp"].astype(dtype="datetime64")
+df_val["time:timestamp"] = df_val["time:timestamp"].astype(dtype="datetime64")
+
+
+# Cumulative sum function to be used later
+def CumSum(lists):
+    # Returns the cumulative sum of a list
+    length = len(lists)
+    cu_list = [sum(lists[0: x: 1]) for x in range(0, length + 1)]
+    return cu_list[1: ]
+
+def time_difference(df):
+    # Calculate time difference between each row
+    df['time_diff'] = df['time:timestamp'].diff().dt.total_seconds()
+    # Set the time difference of the 1st row to 0 as it's currently NaN
+    df.at[0, 'time_diff'] = 0
+    # Count number of steps per process
+    length_per_case_List = df.groupby(['case:concept:name'])['time_diff'].count().tolist()
+
+    # Using the cumulative sum we get all the positions that are a first step in a process
+    # And then the time difference can be set to 0
+    position_lst = CumSum(length_per_case_List)
+    for i in tqdm(position_lst):
+        df.at[i, 'time_diff'] = 0
+    # For Loop mysteriously creates an empty row at the end of the df, gotta delete it
+    df = df.iloc[: -1]
+
+    # Unzip the position list to get the number of each steps of each process, make that into a list
+    step_in_process = []
+    for x in tqdm(length_per_case_List):
+        for y in range(x):
+            step_in_process.append(y + 1)
+    # Assign position number to each row/process
+    df['position'] = step_in_process
+    return df
+
+# Apply the above changes to all dataframes
+# The warnings are obsolete, it's because it uses .at which is considerably faster than .loc
+df_train = time_difference(df_train)
+df_val = time_difference(df_val)
+df_test = time_difference(df_test)
+
+# Get the list of position number
+step_in_process_train = df_train['position'].tolist()
+# Calculate mean time difference grouped by position based on the number of cases
+mean_time_lst = df_train.groupby('position')['time_diff'].mean().tolist()
+
+# Create the predicted time column per entry using the mean time difference
+pred_time_lst_train = [mean_time_lst[j - 1] for j in step_in_process_train]
+df_train['baseline_predicted_time'] = pred_time_lst_train
+
+def apply_prediction(df):
+    # Get the list of position number
+    step_in_process = df['position'].tolist()
+
+    # Create the predicted time column per entry using the mean time difference
+    # If some position numbers are not shown in the training dataset, its predicted time will be 0
+    pred_time_lst = []
+    for j in step_in_process:
+        if j <= len(mean_time_lst):
+            pred_time_lst.append(mean_time_lst[j - 1])
+        else:
+            pred_time_lst.append(0)
+    df['baseline_predicted_time'] = pred_time_lst
+    return df
+
+# Apply the above changes to all dataframes
+# The warnings are obsolete, it's because it uses .at which is considerably faster than .loc
+df_train = time_difference(df_train)
+df_val = time_difference(df_val)
+df_test = time_difference(df_test)
+
+# Apply the above changes to all dataframes
+df_val = apply_prediction(df_val)
+df_test = apply_prediction(df_test)
+
+# TODO Apply the same to Baseline A
+# Add a column with the squared difference between the actual and predicted time difference 
+df_test['error_squared'] = (df_test['time_diff']-df_test['baseline_predicted_time']) ** 2
+
+# Calculate the Mean Squared Error as the average of all squared differences. 
+mse_test = sum(df_test['error_squared']) / len(df_test['error_squared'])
+
+metrics_out = open("metrics.txt", "a")
+
+metrics_out.write('Baseline algorithm B MSE: ' + str(round(mse_test,2)))
+metrics_out.close()
+
+print('BASELINE ALGORITHM B MSE: ', mse_test)
+
+result_df["Baseline B"] = df_test['baseline_predicted_time']
+
 print("----- RANDOM FOREST -----")
-# Perform conversion
+df_train = pd.read_csv("bpi2017_train_filtered.csv")
+df_test = pd.read_csv("bpi2017_test_filtered.csv")
+df_val = pd.read_csv("bpi2017_val_filtered.csv")
+
+df_train = df_train[:n]
+df_test = df_test[:n]
+df_val = df_val[:n]
+
 df_train["Date"] = np.array(
     df_train["time:timestamp"].values, dtype="datetime64"
 ).astype(datetime.datetime)
@@ -110,7 +278,7 @@ df_val["time:unix"] = (df_val["Date"] - pd.Timestamp("1970-01-01")) // pd.Timede
 def assign_position(df: pd.DataFrame) -> pd.DataFrame:
     # Count number of processes per trace/ID
     count_lst = df.groupby("case:concept:name").count()["lifecycle:transition"].tolist()
-    position_lst_1 = [list(range(1, i + 1)) for i in count_lst]
+    position_lst_1 = [list(range(1, i+1)) for i in count_lst]
     position_lst = []
     for i in position_lst_1:
         for j in i:
@@ -2369,7 +2537,7 @@ def test(model, log):
     return predict_next(log, model)
 
 
-data = "BPIC2012_FULL.csv"
+data = "bpi2012_full_filtered.csv"
 case_attr = "case"
 act_attr = "event"
 
